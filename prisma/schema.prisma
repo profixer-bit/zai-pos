@@ -1,0 +1,486 @@
+// Multi-tenant Repair Shop Management SaaS Database Schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== TENANCY & SUBSCRIPTION ====================
+
+model Tenant {
+  id              String   @id @default(cuid())
+  name            String
+  subdomain       String   @unique
+  logo            String?
+  isActive        Boolean  @default(true)
+  isTrial         Boolean  @default(true)
+  trialEndsAt     DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  subscription    Subscription?
+  users           User[]
+  customers       Customer[]
+  jobsheets       JobSheet[]
+  inventory       Inventory[]
+  categories      InventoryCategory[]
+  suppliers       Supplier[]
+  invoices        Invoice[]
+  staff           Staff[]
+  whatsappTemplates WhatsAppTemplate[]
+  whatsappMessages WhatsAppMessage[]
+  auditLogs       AuditLog[]
+}
+
+enum PlanType {
+  BASIC
+  PRO
+  ENTERPRISE
+}
+
+model Plan {
+  id          String    @id @default(cuid())
+  name        String
+  type        PlanType
+  price       Float
+  currency    String    @default("USD")
+  maxUsers    Int       @default(1)
+  maxStorage  Int       @default(1000) // MB
+  features    String    // JSON string
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  subscriptions Subscription[]
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  SUSPENDED
+  CANCELLED
+  EXPIRED
+}
+
+model Subscription {
+  id              String              @id @default(cuid())
+  tenantId        String              @unique
+  tenant          Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  planId          String
+  plan            Plan                @relation(fields: [planId], references: [id])
+  status          SubscriptionStatus  @default(ACTIVE)
+  startDate       DateTime            @default(now())
+  endDate         DateTime
+  autoRenew       Boolean             @default(true)
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+}
+
+// ==================== USER & AUTHENTICATION ====================
+
+enum UserRole {
+  SUPER_ADMIN  // Platform admin
+  ADMIN       // Tenant admin
+  MANAGER     // Manager
+  TECHNICIAN  // Technician
+  CASHIER     // Cashier
+  VIEWER      // Read-only
+}
+
+model User {
+  id            String    @id @default(cuid())
+  tenantId      String
+  tenant        Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  email         String
+  password      String    // Hashed
+  name          String
+  role          UserRole  @default(TECHNICIAN)
+  avatar        String?
+  phone         String?
+  isActive      Boolean   @default(true)
+  lastLoginAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  jobsheets     JobSheet[]
+  auditLogs     AuditLog[]
+
+  @@unique([tenantId, email])
+}
+
+// ==================== CUSTOMER MANAGEMENT ====================
+
+model Customer {
+  id              String    @id @default(cuid())
+  tenantId        String
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name            String
+  email           String?
+  phone           String
+  address         String?
+  notes           String?
+  isActive        Boolean   @default(true)
+  totalJobs       Int       @default(0)
+  totalSpent      Float     @default(0)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  jobsheets       JobSheet[]
+  invoices        Invoice[]
+
+  @@index([tenantId, isActive])
+}
+
+// ==================== JOB SHEET / REPAIR TICKETS ====================
+
+enum JobStatus {
+  PENDING
+  IN_PROGRESS
+  WAITING_PARTS
+  COMPLETED
+  DELIVERED
+  CANCELLED
+}
+
+enum Priority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+model JobSheet {
+  id              String    @id @default(cuid())
+  tenantId        String
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customerId      String
+  customer        Customer  @relation(fields: [customerId], references: [id])
+  technicianId    String?
+  technician      User?     @relation(fields: [technicianId], references: [id])
+  status          JobStatus @default(PENDING)
+  priority        Priority  @default(NORMAL)
+  deviceType      String?
+  deviceBrand     String?
+  deviceModel     String?
+  serialNumber    String?
+  problem         String?
+  diagnosis       String?
+  solution        String?
+  estimatedCost   Float?
+  actualCost      Float?
+  notes           String?
+  preRepairPhotos String?   // JSON array of photo URLs
+  completedAt     DateTime?
+  deliveredAt     DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  items           JobItem[]
+  invoice         Invoice?
+
+  @@index([tenantId, status])
+  @@index([tenantId, customerId])
+}
+
+model JobItem {
+  id          String    @id @default(cuid())
+  jobsheetId  String
+  jobsheet    JobSheet  @relation(fields: [jobsheetId], references: [id], onDelete: Cascade)
+  inventoryId String?
+  inventory   Inventory? @relation(fields: [inventoryId], references: [id])
+  name        String
+  quantity    Int
+  unitPrice   Float
+  totalPrice  Float
+  createdAt   DateTime  @default(now())
+}
+
+// ==================== INVENTORY MANAGEMENT ====================
+
+model InventoryCategory {
+  id          String      @id @default(cuid())
+  tenantId    String
+  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  isActive    Boolean     @default(true)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  items       Inventory[]
+
+  @@unique([tenantId, name])
+}
+
+model Inventory {
+  id              String              @id @default(cuid())
+  tenantId        String
+  tenant          Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  categoryId      String
+  category        InventoryCategory   @relation(fields: [categoryId], references: [id])
+  supplierId      String?
+  supplier        Supplier?           @relation(fields: [supplierId], references: [id])
+  name            String
+  sku             String?             @unique
+  barcode         String?
+  description     String?
+  unit            String              @default("pcs")
+  costPrice       Float
+  sellingPrice    Float
+  currentStock    Int                 @default(0)
+  minStock        Int                 @default(5)
+  maxStock        Int?
+  location        String?
+  image           String?
+  isActive        Boolean             @default(true)
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  transactions    InventoryTransaction[]
+  jobItems        JobItem[]
+  invoiceItems    InvoiceItem[]
+
+  @@index([tenantId, isActive])
+  @@index([tenantId, categoryId])
+}
+
+enum TransactionType {
+  PURCHASE
+  SALE
+  ADJUSTMENT
+  TRANSFER
+  RETURN
+}
+
+model InventoryTransaction {
+  id          String          @id @default(cuid())
+  inventoryId String
+  inventory   Inventory       @relation(fields: [inventoryId], references: [id], onDelete: Cascade)
+  type        TransactionType
+  quantity    Int
+  unitCost    Float?
+  totalCost   Float?
+  notes       String?
+  referenceId String?         // JobSheet, Invoice, etc.
+  createdAt   DateTime        @default(now())
+
+  @@index([inventoryId, createdAt])
+}
+
+model Supplier {
+  id          String      @id @default(cuid())
+  tenantId    String
+  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name        String
+  email       String?
+  phone       String?
+  address     String?
+  notes       String?
+  isActive    Boolean     @default(true)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  inventory   Inventory[]
+}
+
+// ==================== INVOICE & PAYMENT ====================
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  PAID
+  PARTIAL
+  OVERDUE
+  CANCELLED
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  BANK_TRANSFER
+  QR_CODE
+  E_WALLET
+}
+
+model Invoice {
+  id              String          @id @default(cuid())
+  tenantId        String
+  tenant          Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customerId      String
+  customer        Customer        @relation(fields: [customerId], references: [id])
+  jobsheetId      String?         @unique
+  jobsheet        JobSheet?       @relation(fields: [jobsheetId], references: [id])
+  invoiceNumber   String          @unique
+  status          InvoiceStatus   @default(DRAFT)
+  subtotal        Float
+  tax             Float           @default(0)
+  discount        Float           @default(0)
+  total           Float
+  paidAmount      Float           @default(0)
+  notes           String?
+  dueDate         DateTime?
+  paidAt          DateTime?
+  sentAt          DateTime?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  items           InvoiceItem[]
+  payments        Payment[]
+
+  @@index([tenantId, status])
+  @@index([tenantId, customerId])
+}
+
+model InvoiceItem {
+  id          String    @id @default(cuid())
+  invoiceId   String
+  invoice     Invoice   @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  inventoryId String?
+  inventory   Inventory? @relation(fields: [inventoryId], references: [id])
+  name        String
+  quantity    Int
+  unitPrice   Float
+  totalPrice  Float
+  createdAt   DateTime @default(now())
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+model Payment {
+  id              String          @id @default(cuid())
+  invoiceId       String
+  invoice         Invoice         @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  amount          Float
+  method          PaymentMethod
+  reference       String?
+  status          PaymentStatus   @default(PENDING)
+  notes           String?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+}
+
+// ==================== STAFF MANAGEMENT ====================
+
+model Staff {
+  id              String    @id @default(cuid())
+  tenantId        String
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId          String?   @unique // If also a user
+  name            String
+  email           String?
+  phone           String?
+  role            UserRole  @default(TECHNICIAN)
+  hireDate        DateTime?
+  salary          Float?
+  commissionRate  Float?    @default(0)
+  isActive        Boolean   @default(true)
+  lastLoginAt     DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  salaries        StaffSalary[]
+
+  @@index([tenantId, isActive])
+}
+
+model StaffSalary {
+  id          String    @id @default(cuid())
+  staffId     String
+  staff       Staff     @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  month       String    // YYYY-MM format
+  baseSalary  Float
+  commission  Float     @default(0)
+  bonus       Float     @default(0)
+  deductions  Float     @default(0)
+  total       Float
+  notes       String?
+  paidAt      DateTime?
+  createdAt   DateTime  @default(now())
+}
+
+// ==================== WHATSAPP AUTOMATION ====================
+
+enum TemplateType {
+  JOB_STATUS_UPDATE
+  APPOINTMENT_REMINDER
+  INVOICE_SEND
+  PAYMENT_RECEIPT
+  PROMOTION
+  CUSTOM
+}
+
+model WhatsAppTemplate {
+  id          String       @id @default(cuid())
+  tenantId    String
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name        String
+  type        TemplateType
+  content     String       // Template with variables like {{name}}, {{status}}
+  isActive    Boolean      @default(true)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  messages    WhatsAppMessage[]
+
+  @@unique([tenantId, name])
+}
+
+enum MessageStatus {
+  QUEUED
+  SENT
+  DELIVERED
+  READ
+  FAILED
+}
+
+model WhatsAppMessage {
+  id              String          @id @default(cuid())
+  tenantId        String
+  tenant          Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  templateId      String?
+  template        WhatsAppTemplate? @relation(fields: [templateId], references: [id])
+  recipient       String          // Phone number
+  message         String
+  status          MessageStatus   @default(QUEUED)
+  referenceId     String?         // JobSheet, Invoice, etc.
+  cost            Float?          // Credit cost
+  sentAt          DateTime?
+  deliveredAt     DateTime?
+  readAt          DateTime?
+  failedAt        DateTime?
+  error           String?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  @@index([tenantId, status])
+  @@index([tenantId, createdAt])
+}
+
+// ==================== AUDIT LOG ====================
+
+model AuditLog {
+  id          String    @id @default(cuid())
+  tenantId    String
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+  action      String    // CREATE, UPDATE, DELETE, LOGIN, LOGOUT
+  entity      String    // Customer, JobSheet, Invoice, etc.
+  entityId    String?
+  oldValues   String?   // JSON
+  newValues   String?   // JSON
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime  @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, userId])
+}
